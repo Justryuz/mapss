@@ -1,0 +1,22 @@
+{
+  "name": "nadma-api",
+  "version": "1.0.0",
+  "description": "NADMA data fetcher - Playwright, Public API, Scraper",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "server": "node server.js",
+    "playwright": "node src/playwright-intercept.js",
+    "public-api": "node src/public-api.js",
+    "scraper": "node src/scraper.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "chalk": "^5.3.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "playwright": "^1.48.0"
+  }
+}

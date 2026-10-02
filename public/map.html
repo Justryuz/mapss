@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ms">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NADMA Live Map — Malaysia</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root { --bg:#0a0e1a; --panel:rgba(14,18,32,.94); --accent:#4a9eff; }
+    html, body { margin: 0; height: 100%; background: var(--bg); font-family: system-ui, -apple-system, sans-serif; color:#e8ecff; overflow:hidden; }
+    #map { position: absolute; inset: 0; background: var(--bg); }
+    .sat-frame { mix-blend-mode: screen; }
+    .overlay-tile { opacity: 0.75; }
+
+    /* Panel info kiri atas */
+    .info {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: var(--panel); padding: 12px 14px; border-radius: 12px;
+      max-width: 240px; box-shadow: 0 6px 24px rgba(0,0,0,.5); backdrop-filter: blur(8px); font-size:12px;
+    }
+    .info h1 { font-size: 14px; margin: 0 0 8px; }
+    .info .row { display:flex; justify-content:space-between; margin:2px 0; }
+    .info .val { color: var(--accent); font-weight:600; }
+
+    /* Layer switcher kanan atas */
+    .layers {
+      position: absolute; top: 12px; right: 12px; z-index: 1000;
+      background: var(--panel); padding: 10px; border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.5); backdrop-filter: blur(8px); width: 180px;
+    }
+    .layers .title { font-size:11px; text-transform:uppercase; letter-spacing:.5px; opacity:.6; margin:6px 4px 4px; }
+    .layers button {
+      display:flex; align-items:center; gap:8px; width:100%; text-align:left;
+      background:transparent; color:#e8ecff; border:0; padding:8px 10px; border-radius:8px;
+      cursor:pointer; font-size:13px; margin:1px 0;
+    }
+    .layers button:hover { background:rgba(74,158,255,.15); }
+    .layers button.active { background:var(--accent); color:#fff; font-weight:600; }
+    .layers button .ic { font-size:15px; width:20px; text-align:center; }
+
+    /* Timeline bawah */
+    .timeline {
+      position:absolute; bottom:16px; left:50%; transform:translateX(-50%); z-index:1000;
+      background:var(--panel); padding:10px 16px; border-radius:30px; display:flex; align-items:center; gap:12px;
+      box-shadow:0 6px 24px rgba(0,0,0,.5); backdrop-filter:blur(8px);
+    }
+    .timeline button { background:#2a3a66; color:#fff; border:0; width:36px; height:36px; border-radius:50%; cursor:pointer; font-size:15px; }
+    .timeline button:hover { background:#3a4e86; }
+    .timeline input[type=range]{ width:200px; accent-color:var(--accent); }
+    .timeline .t { font-size:12px; min-width:140px; text-align:center; font-variant-numeric:tabular-nums; }
+
+    .legend { position:absolute; bottom:16px; left:12px; z-index:1000; background:var(--panel); padding:8px 12px; border-radius:10px; font-size:11px; line-height:1.7; }
+    .legend .dot{ display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="info">
+    <h1>🌏 NADMA Live — Malaysia</h1>
+    <div class="row"><span>Layer</span><span class="val" id="curLayer">Satelit</span></div>
+    <div class="row"><span>Ribut dikesan</span><span class="val" id="storms">—</span></div>
+    <div class="row"><span>Kebakaran</span><span class="val" id="fires">—</span></div>
+    <div class="row"><span>Kemaskini</span><span class="val" id="updated">—</span></div>
+  </div>
+
+  <div class="layers">
+    <div class="title">Satelit & Radar</div>
+    <button data-layer="satellite" class="active"><span class="ic">🛰️</span> Satelit (awan)</button>
+    <button data-layer="precipitation"><span class="ic">🌧️</span> Hujan</button>
+    <div class="title">Cuaca</div>
+    <button data-layer="wind-speed"><span class="ic">💨</span> Angin</button>
+    <button data-layer="temperature"><span class="ic">🌡️</span> Suhu</button>
+    <button data-layer="humidity"><span class="ic">💧</span> Kelembapan</button>
+    <button data-layer="pressure"><span class="ic">🧭</span> Tekanan</button>
+  </div>
+
+  <div class="timeline">
+    <button id="playBtn" title="Main/Henti">⏸</button>
+    <input type="range" id="scrub" min="0" value="0" />
+    <span class="t" id="tLabel">memuatkan…</span>
+  </div>
+
+  <div class="legend">
+    <div><span class="dot" style="background:#ff5a5a"></span> Ribut tropika</div>
+    <div><span class="dot" style="background:#ff9500"></span> Kebakaran</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const API = 'http://localhost:3000';
+
+    const map = L.map('map', {
+      center: [4.2, 108.5], zoom: 6, minZoom: 4, maxZoom: 9,
+    });
+
+    // Base map Voyager (Malaysia sentiasa nampak)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_47jz_1_a190f3eefcaf8cf5655af2f6', {
+      attribution: '© OpenStreetMap, © CARTO', subdomains: 'abcd', maxZoom: 10,
+    }).addTo(map);
+
+    // ─── State ───
+    let activeLayer = 'satellite';
+    let frameLayers = [];   // untuk animasi satelit
+    let frames = [];
+    let overlayLayer = null; // untuk layer cuaca (single frame)
+    let current = 0, playing = true, timer = null;
+
+    const playBtn = document.getElementById('playBtn');
+    const scrub = document.getElementById('scrub');
+    const tLabel = document.getElementById('tLabel');
+
+    function clearLayers() {
+      frameLayers.forEach(l => map.removeLayer(l));
+      frameLayers = [];
+      if (overlayLayer) { map.removeLayer(overlayLayer); overlayLayer = null; }
+      clearInterval(timer);
+    }
+
+    // ─── Satelit animasi (multi-frame) ───
+    async function loadSatellite() {
+      clearLayers();
+      const r = await fetch(`${API}/api/satellite/frames`);
+      const d = await r.json();
+      frames = d.frames || [];
+      if (!frames.length) { tLabel.textContent = 'tiada frame'; return; }
+
+      frames.forEach(f => {
+        const layer = L.tileLayer(`${API}${f.tile_proxy}`, {
+          opacity: 0, maxZoom: 9, maxNativeZoom: 8, className: 'sat-frame',
+          attribution: 'Zoom Earth / Himawari', keepBuffer: 4,
+        });
+        layer.addTo(map);
+        frameLayers.push(layer);
+      });
+      scrub.max = frames.length - 1;
+      scrub.disabled = false;
+      showFrame(frames.length - 1);
+      play();
+    }
+
+    function showFrame(i) {
+      if (!frameLayers.length) return;
+      frameLayers.forEach((l, idx) => l.setOpacity(idx === i ? 1 : 0));
+      current = i; scrub.value = i;
+      tLabel.textContent = new Date(frames[i].iso).toLocaleString('ms-MY', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+    }
+
+    // ─── Overlay cuaca (single frame) ───
+    async function loadOverlay(layer) {
+      clearLayers();
+      scrub.disabled = true;
+      const r = await fetch(`${API}/api/overlay/${layer}`);
+      const d = await r.json();
+      if (!d.success) { tLabel.textContent = 'ralat layer'; return; }
+
+      overlayLayer = L.tileLayer(`${API}${d.tile_proxy}`, {
+        opacity: 0.75, maxZoom: 9, maxNativeZoom: 7, className: 'overlay-tile',
+        attribution: 'Zoom Earth / ICON', keepBuffer: 2,
+      }).addTo(map);
+      tLabel.textContent = `${d.label} — ${new Date(d.valid_time).toLocaleString('ms-MY',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`;
+    }
+
+    // ─── Animasi control ───
+    function nextFrame() { if (frameLayers.length) showFrame((current + 1) % frameLayers.length); }
+    function play() { if (activeLayer !== 'satellite') return; playing = true; playBtn.textContent = '⏸'; clearInterval(timer); timer = setInterval(nextFrame, 450); }
+    function pause() { playing = false; playBtn.textContent = '▶'; clearInterval(timer); }
+    playBtn.onclick = () => playing ? pause() : play();
+    scrub.oninput = () => { pause(); showFrame(Number(scrub.value)); };
+
+    // ─── Layer switcher ───
+    document.querySelectorAll('.layers button').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.layers button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeLayer = btn.dataset.layer;
+        document.getElementById('curLayer').textContent = btn.textContent.trim();
+        if (activeLayer === 'satellite') loadSatellite();
+        else loadOverlay(activeLayer);
+      };
+    });
+
+    // ─── Ribut tropika ───
+    const stormLayer = L.layerGroup().addTo(map);
+    async function loadStorms() {
+      try {
+        const d = await (await fetch(`${API}/api/storms`)).json();
+        stormLayer.clearLayers();
+        let n = 0;
+        (d.ribut || []).forEach(s => {
+          const track = s.butiran?.track;
+          if (!Array.isArray(track) || !track.length) return;
+          n++;
+          L.polyline(track.map(p => [p.coordinates[1], p.coordinates[0]]), { color:'#ff5a5a', weight:2, dashArray:'5 5', opacity:.85 }).addTo(stormLayer);
+          const last = track[track.length - 1];
+          L.circleMarker([last.coordinates[1], last.coordinates[0]], { radius:8, color:'#ff3030', fillColor:'#ff5a5a', fillOpacity:.8, weight:2 })
+            .addTo(stormLayer)
+            .bindPopup(`<b>🌀 ${s.nama}</b><br>${last.description||''}<br>Angin: ${last.wind} kt | Tekanan: ${last.pressure} hPa`);
+        });
+        document.getElementById('storms').textContent = n;
+      } catch (e) { console.error('storms', e); }
+    }
+
+    // ─── Kebakaran (dari zoom.earth / NASA FIRMS) ───
+    const fireLayer = L.layerGroup().addTo(map);
+    async function loadFires() {
+      try {
+        const d = await (await fetch(`${API}/api/fires`)).json();
+        fireLayer.clearLayers();
+        const list = d.kebakaran || [];
+        document.getElementById('fires').textContent = d.total || 0;
+        list.forEach(f => {
+          const lat = f.lat ?? f.latitude ?? f.geometry?.coordinates?.[1];
+          const lon = f.lon ?? f.lng ?? f.longitude ?? f.geometry?.coordinates?.[0];
+          if (lat == null || lon == null) return;
+          L.circleMarker([lat, lon], { radius:5, color:'#ff6a00', fillColor:'#ff9500', fillOpacity:.8, weight:1 })
+            .addTo(fireLayer)
+            .bindPopup(`<b>🔥 Kebakaran</b><br>${lat.toFixed(2)}, ${lon.toFixed(2)}`);
+        });
+      } catch (e) { console.error('fires', e); }
+    }
+
+    function stamp() { document.getElementById('updated').textContent = new Date().toLocaleTimeString('ms-MY'); }
+
+    // Init
+    loadSatellite();
+    loadStorms();
+    loadFires();
+    stamp();
+
+    // Auto-refresh 5 min
+    setInterval(() => {
+      if (activeLayer === 'satellite') loadSatellite(); else loadOverlay(activeLayer);
+      loadStorms(); loadFires(); stamp();
+    }, 5 * 60 * 1000);
+  </script>
+</body>
+</html>
